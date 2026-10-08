@@ -930,11 +930,16 @@ void XEdDSA::deriveKeys(SHA512 *hash, limb_t *a, const uint8_t privateKey[32])
  * \param publicKey The public key corresponding to \a privateKey.
  * \param message Points to the message to be signed.
  * \param len The length of the \a message to be signed.
+ * \param baseMul Optional function that computes R = r * B, for example on a crypto
+ *  accelerator. If it is null or returns false, R is computed in software. The
+ *  signature is the same either way.
+ * \param baseMulCtx Passed to \a baseMul unchanged.
  *
  * \sa verify(), derivePublicKey()
  */
 void XEdDSA::sign(uint8_t signature[64], const uint8_t privateKey[32],
-                   const uint8_t publicKey[32], const void *message, size_t len)
+                   const uint8_t publicKey[32], const void *message, size_t len,
+                   XEdDSABaseMulFn baseMul, void *baseMulCtx)
 {
     SHA512 hash;
     uint8_t *buf = (uint8_t *)(hash.state.w); // Reuse hash buffer to save memory.
@@ -956,8 +961,17 @@ void XEdDSA::sign(uint8_t signature[64], const uint8_t privateKey[32],
     reduceQFromBuffer(r, buf, t);
 
     // Encode rB into the first half of the signature buffer as R.
-    mul(rB, r);
-    encodePoint(signature, rB);
+    bool haveR = false;
+    if (baseMul) {
+        uint8_t rBytes[32];
+        BigNumberUtil::packLE(rBytes, 32, r, NUM_LIMBS_256BIT);
+        haveR = baseMul(baseMulCtx, signature, rBytes);
+        clean(rBytes);
+    }
+    if (!haveR) {
+        mul(rB, r);
+        encodePoint(signature, rB);
+    }
 
     // Hash R, A, and the message to get k.
     hash.reset();
